@@ -1,0 +1,500 @@
+---
+title: "Projet de Statistique Appliquée"
+output: html_notebook
+---
+
+Ce script a été écrit par Alexis AYME, Aeson FEEHAN, Romain Ilbert et Aaron Mamann pour un projet de Statistique Appliquée, à l'ENSAE Paris, en 2020. Le projet a été supervisé par Guillaume LECUÉ. Il permet, à partir d'une base de données macroéconomiques et financières, d'identifier des grandes périodes de relative homogénéité macroéconomique en France, entre 2000 et 2020. En particulier, ce script tente de contourner le manque de données dans certaines catégories par imputation (partie II) ou sans imputation (partie III) de ces données. Il correspond aux parties 2, 3 et 5 du rapport écrit.
+
+
+
+
+Avant de commencer :
+```{r}
+rm(list = ls(all.names = TRUE))
+```
+L'adresse suivante permet de localiser les bases des données brutes qui seront utilisées :
+```{r}
+adress = "/Users/aesonfeehan/Documents/SCHOOL/ENSAE2/STATAPP/donnees/"
+```
+Quelques librairies génériques :
+```{r}
+library(dplyr)
+library(readr)
+library(missMDA)
+library(FactoMineR)
+library(graphics)
+library(ggplot2)
+```
+
+
+
+
+
+#PARTIE 1 : PRE-PROCESSING
+
+
+Pour éviter la sur-abondance de données manquantes dans la base de travail, on se restreint aux données de fréquence mensuelle, trimestrielle ou annuelle.
+```{r}
+#  YEARLY DATA
+A1 = read.csv(paste(adress,"A1.CSV", sep=""))
+A2 = read.csv(paste(adress,"A2.CSV", sep=""))
+A3 = read.csv(paste(adress,"A3.CSV", sep=""))
+A4 = read.csv(paste(adress,"A4.CSV", sep=""))
+A5 = read.csv(paste(adress,"A5.CSV", sep=""))
+A6 = read.csv(paste(adress,"A6.CSV", sep=""))
+A7 = read.csv(paste(adress,"A7.CSV", sep=""))
+A8 = read.csv(paste(adress,"A8.CSV", sep=""))
+#  QUARTERLY DATA
+Q1 = read.csv(paste(adress,"Q1.CSV", sep=""))
+Q2 = read.csv(paste(adress,"Q2.CSV", sep=""))
+#  MONTHLY DATA
+M1 = read.csv(paste(adress,"M1.CSV", sep=""))
+M2 = read.csv(paste(adress,"M2.CSV", sep=""))
+M3 = read.csv(paste(adress,"M3.CSV", sep=""))
+
+
+seperateSets = list(A1,A2,A3,A4,A5,A6,A7,A8,Q1,Q2,M1,M2,M3)
+BigMat <- Reduce(function(x, y) merge(x, y, all=TRUE),seperateSets)
+```
+
+On se réduit aux variables décrivant l'économie française :
+```{r}
+frenchVar <- function(str){
+#returns True if variable str is French, False otherwise
+	ctry <- substr(str, start=7, stop=8 )
+	if(identical(ctry,"FR")){
+		return(TRUE)
+	}
+	if(identical(str,"X")){
+		return(TRUE)
+	}
+	else{return(FALSE)}
+}
+
+makeFrench <- function(df){
+	goodcols <- c()
+	for(col in colnames(df)){
+		goodcols <- c(goodcols,frenchVar(col))
+	}
+	return(goodcols)
+}
+
+frenchMatrix <- BigMat[makeFrench(BigMat)]
+```
+
+On se réduit à la période 2000-2020 :
+```{r}
+good_years <- as.character(c(2000,2001,2002,2003,2004,2005,2006,
+							 2007,2008,2009,2010,2011,2012,2013,
+							 2014,2015,2016,2017,2018,2019))
+allowed_dates <- c(0)
+date_index <- 1
+for(t in frenchMatrix$X){
+	if(substr(x=t, start = 7, stop=11) %in% good_years){
+		allowed_dates <- c(allowed_dates,date_index)
+	}
+	date_index = date_index + 1
+}
+
+redMat <- frenchMatrix[allowed_dates,] #reduced matrix
+row.names(redMat) <- redMat$X
+redMat <- select(redMat,-c(1))
+redMat <- select(redMat,-c(1,2))
+```
+
+On transforme les données en une matrice "dBFin" et une dataframe "fdf" pour éviter les problèmes de conversion par la suite :
+```{r}
+dBFin <- select(redMat,-c(28,29)) #final matrix
+dBFin[dBFin == '#N/A' ] <- NA
+dBFin <- dBFin[-c(60,80,160,180,200,220,240),]
+
+fdf <- as.data.frame(redMat) #final dataframe
+rownames(fdf) <- fdf$X
+fdf <- fdf[ , !(names(fdf) %in% c("X"))]
+
+for (i in seq_len(87)){
+	dBFin[,i] = as.numeric(as.character(dBFin[,i]))
+}
+```
+
+On se restreint enfin aux variables jugées importantes du point de vue macroéconomique. Par ailleurs, on agrège certaines variables qui décrivent la même chose. Grâce à cette étape de choix des variables, on évite le problème potentiel d'une distinction de clusters fondée sur des variables inintéressantes mais qui varient beaucoup.
+```{r}
+#First Agregation 
+dBFin["CBD_A_FR_BNPPPTB_PM"] <- (dBFin["CBD_A_FR_BNPPPTB_PM"] + 
+								 	dBFin["CBD_A_FR_SGSAPTB_PM"]   )/2
+dBFin <- select(dBFin,-c("CBD_A_FR_SGSAPTB_PM"))
+
+#Second Agregation
+dBFin["CBD_A_FR_BNPPTTA_MM"] <- (dBFin["CBD_A_FR_BNPPTTA_MM"] +
+								 	dBFin["CBD_A_FR_CIFETTA_MM"] +
+								 	dBFin["CBD_A_FR_CAGETTA_MM"] +
+								 	dBFin["CBD_A_FR_CMUTTTA_MM"] +
+								 	dBFin["CBD_A_FR_BPCETTA_MM"] +
+								 	dBFin["CBD_A_FR_POSTTTA_MM"] +
+								 	dBFin["CBD_A_FR_SGSATTA_MM"]   )/7
+
+dBFin <- select(dBFin,-c("CBD_A_FR_CIFETTA_MM","CBD_A_FR_CAGETTA_MM",
+					"CBD_A_FR_CMUTTTA_MM","CBD_A_FR_BPCETTA_MM",
+					"CBD_A_FR_POSTTTA_MM","CBD_A_FR_SGSATTA_MM"))
+
+#Third Agregation 
+dBFin["CBD_A_FR_BNPPLEV_PM"]<- (dBFin["CBD_A_FR_BNPPLEV_PM"] +
+									dBFin["CBD_A_FR_CAGELEV_PM"] +
+									dBFin["CBD_A_FR_BPCELEV_PM"] +
+									dBFin["CBD_A_FR_SGSALEV_PM"]   )/4
+dBFin <- select(dBFin,-c("CBD_A_FR_CAGELEV_PM","CBD_A_FR_BPCELEV_PM",
+						 "CBD_A_FR_SGSALEV_PM"))
+
+#Restriction to macroeconomically significant variables
+dBFin <- dBFin[c("CBD_A_FR_LTDRAV_AM","CBD_A_FR_BNPPPTB_PM",
+				 "CBD_A_FR_BKREAV_AM","CBD_A_FR_BKRAAV_AM",
+				 "CBD_A_FR_BNPPTTA_MM","CBD_A_FR_GSIBTO_PM",
+				 "ICP_M_FR_INFL_PK","MNA_A_FR_DEFPU_PK",
+				 "MNA_A_FR_SOLDTRANS_PK","STP_M_FR_CACRTRIND_BK",
+				 "STP_M_FR_EURSTOXTRIND_BK","STP_M_FR_CACIND_BK",
+				 "STP_M_FR_EURSTOXIND_BK","STP_M_FR_CACFININD_BK",
+				 "STP_M_FR_CACCGIND_BK","STP_M_FR_CACOGIND_BK",
+				 "CBD_A_FR_BNPPLEV_PM")]
+```
+
+Pour faciliter la lecture des graphiques, on renomme les variables retenues :
+```{r}
+names(dBFin)[names(dBFin) == "CBD_A_FR_LTDRAV_AM"] <- "crédits.dépôts"
+names(dBFin)[names(dBFin) == "CBD_A_FR_BNPPPTB_PM"] <- "cours.valeur.banques"
+names(dBFin)[names(dBFin) == "CBD_A_FR_BKREAV_AM"] <- "rentabilité.capitaux.propres"
+names(dBFin)[names(dBFin) == "CBD_A_FR_BKRAAV_AM"] <- "rentabilité.actifs"
+names(dBFin)[names(dBFin) == "CBD_A_FR_BNPPTTA_MM"] <- "actifs.bancaires.consolidés"
+names(dBFin)[names(dBFin) == "CBD_A_FR_GSIBTO_PM"] <- "actifs.des.GSIB"
+names(dBFin)[names(dBFin) == "ICP_M_FR_INFL_PK"] <- "inflation"
+names(dBFin)[names(dBFin) == "MNA_A_FR_DEFPU_PK"] <- "Balance.budgétaire.Fr"
+names(dBFin)[names(dBFin) == "MNA_A_FR_SOLDTRANS_PK"] <- "Solde.des.transactions.courantes.Fr"
+names(dBFin)[names(dBFin) == "STP_M_FR_CACRTRIND_BK"] <- "CAC.total.return.index"
+names(dBFin)[names(dBFin) == "STP_M_FR_EURSTOXTRIND_BK"] <- "Eurostoxx.total.return.index"
+names(dBFin)[names(dBFin) == "STP_M_FR_CACIND_BK"] <- "CAC.index"
+names(dBFin)[names(dBFin) == "STP_M_FR_EURSTOXIND_BK"] <- "Eurostoxx.Index"
+names(dBFin)[names(dBFin) == "STP_M_FR_CACFININD_BK"] <- "CAC.financier"
+names(dBFin)[names(dBFin) == "STP_M_FR_CACCGIND_BK"] <- "CAC.biens consommation"
+names(dBFin)[names(dBFin) == "STP_M_FR_CACOGIND_BK"] <- "CAC.pétrole.gaz"
+names(dBFin)[names(dBFin) == "CBD_A_FR_BNPPLEV_PM"] <- "Levier.bancaire"
+```
+
+On nettoie enfin l'environnement global :
+```{r}
+rm(A1,A2,A3,A4,A5,A6,A7,A8,M1,M2,M3,Q1,Q2,
+   BigMat,frenchMatrix,
+   redMat,seperateSets,
+   allowed_dates,
+   date_index,
+   good_years,
+   i,t,
+   frenchVar,
+   makeFrench
+   )
+```
+
+
+
+
+
+
+#PARTIE 2 : ACP SUR LES DONNÉES IMPUTÉES, CLUSTERING
+(partie 3 du rapport)
+
+On applique ici une méthode due à Husson et Josse, qui est une méthode d'imputation des données manquantes fondée sur des itérations d'ACP.
+
+*ATTENTION : Toute l'analyse du projet est fait sur le rapport !*
+
+Il faut d'abord charger quelques librairies :
+```{r}
+library(missMDA)
+library(dbscan)
+```
+
+On remplit la base de données avec l'algorithme d'ACP à valeurs manquantes de François Husson avec la commande MIPCA :
+```{r}
+res.compV = MIPCA(dBFin, ncp = 2,scale=TRUE)
+
+# la variable taf désigne la base de données complétée
+taf=data.frame(res.compV["res.imputePCA"])
+```
+
+Pour faire le clustering, nous allons nous ramener d'un espace à 17 dimensions à un espace à 2 dimensions en refaisant une ACP. Ce choix peut s'expliquer :
+
+[a] par le fait que le remplacement des valeurs manquantes pour l'algorithme d'ACP de Francois Husson est particulèrement performant qu'on fait une ACP après avoir complétée la base de données ;
+
+[b] par le fait que le clustering sur un plan comporte plusieurs avantages, comme le fait qu'on peut identifier visuellement les clusterings et savoir dans notre k-means bien fixer le nombre de clusters et bien fixer les centroides initiaux. 
+```{r}
+# on applique une ACP à deux dimensions sur la base de données complétée
+res.pca <- PCA(taf, scale.unit=TRUE, ncp=2, graph = FALSE)
+
+# la variable jknew sélectionne les coordonnées dans la nouvelle base de chaque vecteur projecté (ici les vecteurs sont des dates)  
+jk=data.frame(res.pca["ind"])
+jknew=select(jk,-c(3,4,5,6,7))
+#Affichons les coordonnées dans la nouvelle base
+jknew
+```
+
+On peut représenter le nuage de points projeté pour avoir une idée des clusters possibles :
+```{r fig.height=10, fig.width=10}
+plot.PCA(res.pca, axes=c(1, 2), choix="ind")
+```
+
+En observant le nuage, on distingue 9 bons centroïdes de départ pour l'algorithme de k-means. Cela accélère la convergence de l'algorithme et nous fournit des clusters plus facilement interprétables :
+```{r}
+centers=rbind(as.numeric(unlist(jknew["01/07/2015",])),
+			  as.numeric(unlist(jknew["01/07/2014",])),
+			  as.numeric(unlist(jknew["01/02/2013",])),
+			  as.numeric(unlist(jknew["01/02/2000",])),
+			  as.numeric(unlist(jknew["01/06/2003",])),
+			  as.numeric(unlist(jknew["01/07/2000",])),
+			  as.numeric(unlist(jknew["01/08/2005",])),
+			  as.numeric(unlist(jknew["01/05/2006",])),
+			  as.numeric(unlist(jknew["01/04/2007",])))
+```
+
+On exécute k-means en utilisant les centroïdes choisis. On représente ensuite les clusters obtenus (une couleur par cluster) et les centroïdes choisis (les losanges) :
+```{r fig.height=3, fig.width=3}
+cl <- kmeans(jknew, centers,iter.max=10)
+plot(jknew, col = cl$cluster)
+points(cl$centers, col = 1:9, pch = 9)
+```
+
+Cette commande nous permet d'avoir un tableau avec les dates et leur cluster assigné, ce qui nous servira pour comparer les clusters :
+```{r}
+clus = data.frame(cl["cluster"])
+interm = data.frame(fdf$X)
+row.names(interm) = interm$finalMatrix.X
+interm1 = merge(clus, interm, by=0, all=T)
+```
+
+Ensuite, on crée une base de données séparée pour chaque cluster :
+```{r}
+ens1 <- taf[interm1[ which(interm1$cluster==1), 1],]
+ens2 <- taf[interm1[ which(interm1$cluster==2), 1],]
+ens3 <- taf[interm1[ which(interm1$cluster==3), 1],]
+ens4 <- taf[interm1[ which(interm1$cluster==4), 1],]
+ens5 <- taf[interm1[ which(interm1$cluster==5), 1],]
+ens6 <- taf[interm1[ which(interm1$cluster==6), 1],]
+ens7 <- taf[interm1[ which(interm1$cluster==7), 1],]
+ens8 <- taf[interm1[ which(interm1$cluster==8), 1],]
+ens9 <- taf[interm1[ which(interm1$cluster==9), 1],]
+```
+La subdivision obtenue permet de voir les valeurs des variables dans chaque cluster. Par exemple, on pourra voir si les dates du cluster j ont des indices du CAC 40 élevés, ou si les déficits budgétaires à ces dates sont importants : il s'agit maintenant de voir à quelle situation économique correspond chaque cluster.
+
+Après voir vu la distribution des variables dans chaque cluster pour voir à quelle situation économique correspond chaque cluster, il s'agit de comparer les différences de distributions de chaque variable dans les 9 clusters. On le fait à travers des boxplots :
+```{r fig.height=5, fig.width=5}
+boxplot(ens1$res.imputePCA.CAC.index,ens2$res.imputePCA.CAC.index,ens3$res.imputePCA.CAC.index,ens4$res.imputePCA.CAC.index,ens5$res.imputePCA.CAC.index,ens6$res.imputePCA.CAC.index,ens7$res.imputePCA.CAC.index,ens8$res.imputePCA.CAC.index,ens9$res.imputePCA.CAC.index,horizontal=FALSE,col=c("brown","red","purple","blue","green","yellow","cyan","grey","pink"),main="CAC 40 Index (40 plus grosses entreprises françaises côtées en bourse)",xlim=c(0,10),ylim=c(2800,6000),names=c("cluster 1","cluster 2","cluster 3","cluster 4","cluster 5","cluster 6","cluster 7","cluster 8","cluster 9"))
+
+boxplot(ens1$res.imputePCA.Eurostoxx.Index,ens2$res.imputePCA.Eurostoxx.Index,ens3$res.imputePCA.Eurostoxx.Index,ens4$res.imputePCA.Eurostoxx.Index,ens5$res.imputePCA.Eurostoxx.Index,ens6$res.imputePCA.Eurostoxx.Index,ens7$res.imputePCA.Eurostoxx.Index,ens8$res.imputePCA.Eurostoxx.Index,ens9$res.imputePCA.Eurostoxx.Index,horizontal=FALSE,col=c("brown","red","purple","blue","green","yellow","cyan","grey","pink"),main="Eurostoxx 50 Index (50 plus grosses entreprises côtées en bourse en zone euro)",xlim=c(0,10),names=c("cluster 1","cluster 2","cluster 3","cluster 4","cluster 5","cluster 6","cluster 7","cluster 8","cluster 9"))
+
+boxplot(ens1$res.imputePCA.cours.valeur.banques,ens2$res.imputePCA.cours.valeur.banques,ens3$res.imputePCA.cours.valeur.banques,ens4$res.imputePCA.cours.valeur.banques,ens5$res.imputePCA.cours.valeur.banques,ens6$res.imputePCA.cours.valeur.banques,ens7$res.imputePCA.cours.valeur.banques,ens8$res.imputePCA.cours.valeur.banques,ens9$res.imputePCA.cours.valeur.banques,horizontal=FALSE,col=c("brown","red","purple","blue","green","yellow","cyan","grey","pink"),main="Ratio cours/valeur comptable des banques en France",xlim=c(0,10),ylim=c(42,170),names=c("cluster 1","cluster 2","cluster 3","cluster 4","cluster 5","cluster 6","cluster 7","cluster 8","cluster 9"))
+
+boxplot(ens1$res.imputePCA.Balance.budgétaire.Fr,ens2$res.imputePCA.Balance.budgétaire.Fr,ens3$res.imputePCA.Balance.budgétaire.Fr,ens4$res.imputePCA.Balance.budgétaire.Fr,ens5$res.imputePCA.Balance.budgétaire.Fr,ens6$res.imputePCA.Balance.budgétaire.Fr,ens7$res.imputePCA.Balance.budgétaire.Fr,ens8$res.imputePCA.Balance.budgétaire.Fr,ens9$res.imputePCA.Balance.budgétaire.Fr,horizontal=FALSE,col=c("brown","red","purple","blue","green","yellow","cyan","grey","pink"),main="Balance budgétaire (Déficit budgétaire) en France",xlim=c(0,10),ylim=c(-5.5,-1),names=c("cluster 1","cluster 2","cluster 3","cluster 4","cluster 5","cluster 6","cluster 7","cluster 8","cluster 9"),ylab=c("en % du PIB nominal de la France"))
+
+boxplot(ens1$res.imputePCA.actifs.bancaires.consolidés,ens2$res.imputePCA.actifs.bancaires.consolidés,ens3$res.imputePCA.actifs.bancaires.consolidés,ens4$res.imputePCA.actifs.bancaires.consolidés,ens5$res.imputePCA.actifs.bancaires.consolidés,ens6$res.imputePCA.actifs.bancaires.consolidés,ens7$res.imputePCA.actifs.bancaires.consolidés,ens8$res.imputePCA.actifs.bancaires.consolidés,ens9$res.imputePCA.actifs.bancaires.consolidés,horizontal=FALSE,col=c("brown","red","purple","blue","green","yellow","cyan","grey","pink"),main="Actifs bancaires consolidés (regroupement de l’ensemble des actifs des banques et de leurs filiales) en France ",xlim=c(0,10),names=c("cluster 1","cluster 2","cluster 3","cluster 4","cluster 5","cluster 6","cluster 7","cluster 8","cluster 9"))
+
+boxplot(ens1$res.imputePCA.actifs.des.GSIB,ens2$res.imputePCA.actifs.des.GSIB,ens3$res.imputePCA.actifs.des.GSIB,ens4$res.imputePCA.actifs.des.GSIB,ens5$res.imputePCA.actifs.des.GSIB,ens6$res.imputePCA.actifs.des.GSIB,ens7$res.imputePCA.actifs.des.GSIB,ens8$res.imputePCA.actifs.des.GSIB,ens9$res.imputePCA.actifs.des.GSIB,horizontal=FALSE,col=c("brown","red","purple","blue","green","yellow","cyan","grey","pink"),main="Part des actifs des grandes institutions financières sur le total des actifs consolidés en France",xlim=c(0,10),ylim=c(0.79,0.825),names=c("cluster 1","cluster 2","cluster 3","cluster 4","cluster 5","cluster 6","cluster 7","cluster 8","cluster 9"))
+```
+
+Représentons l'évolution des clusters dans le temps, i.e l'évolution des états économiques dans le temps :
+```{r fig.height=2, fig.width=8}
+plot(as.Date(as.character(interm1$Row.names),format='%d/%m/%Y'),interm1$cluster,ylab = "Numéro du cluster", xlab = "Date (évaluée chaque mois)",ylim=c(0,9))
+```
+
+
+BONUS : Autre méthode de clustering employée le Density-based spatial clustering of applications with noise (DBSCAN)
+
+L’algorithme DBSCAN utilise 2 paramètres : la distance ε et le nombre minimum de points « minPts » devant se trouver dans un rayon ε pour que ces points soient considérés comme un cluster.
+
+On procède comme précédemment, en utilisant DBSCAN :
+```{r}
+dbs = dbscan(jknew, eps=0.6, minPts=5, borderPoints=TRUE)
+
+clus2 = data.frame(jknew,"cluster"= as.list(dbs["cluster"]), rownames(dBFin))
+
+ensA=taf[clus2[ which(clus2$cluster==2), 4],]
+ensB=taf[clus2[ which(clus2$cluster==4), 4],]
+ensC=taf[clus2[ which(clus2$cluster==8), 4],]
+ensD=taf[clus2[ which(clus2$cluster==6), 4],]
+ensE=taf[clus2[ which(clus2$cluster==1), 4],]
+ensF=taf[clus2[ which(clus2$cluster==3), 4],]
+ensG=taf[clus2[ which(clus2$cluster==5), 4],]
+ensH=taf[clus2[ which(clus2$cluster==7), 4],]
+```
+
+On compare les clusters obtenus comme précédemment :
+```{r fig.height=5, fig.width=5}
+boxplot(ensA$res.imputePCA.CAC.index,ensB$res.imputePCA.CAC.index,ensC$res.imputePCA.CAC.index,ensD$res.imputePCA.CAC.index,ensE$res.imputePCA.CAC.index,ensF$res.imputePCA.CAC.index,ensG$res.imputePCA.CAC.index,ensH$res.imputePCA.CAC.index,horizontal=FALSE,col=c("brown","red","purple","blue","green","yellow","cyan","grey"),main="CAC 40 Index (40 plus grosses entreprises francaises côtées en bourse)",xlim=c(0,10),names=c("cluster A","cluster B","cluster C","cluster D","cluster E","cluster F","cluster G","cluster H"))
+
+boxplot(ensA$res.imputePCA.Eurostoxx.Index,ensB$res.imputePCA.Eurostoxx.Index,ensC$res.imputePCA.Eurostoxx.Index,ensD$res.imputePCA.Eurostoxx.Index,ensE$res.imputePCA.Eurostoxx.Index,ensF$res.imputePCA.Eurostoxx.Index,ensG$res.imputePCA.Eurostoxx.Index,ensH$res.imputePCA.Eurostoxx.Index,horizontal=FALSE,col=c("brown","red","purple","blue","green","yellow","cyan","grey"),main="Eurostoxx 50 Index (50 plus grosses entreprises côtées en bourse en zone euro)",xlim=c(0,10),names=c("cluster A","cluster B","cluster C","cluster D","cluster E","cluster F","cluster G","cluster H"))
+
+boxplot(ensA$res.imputePCA.cours.valeur.banques,ensB$res.imputePCA.cours.valeur.banques,ensC$res.imputePCA.cours.valeur.banques,ensD$res.imputePCA.cours.valeur.banques,ensE$res.imputePCA.cours.valeur.banques,ensF$res.imputePCA.cours.valeur.banques,ensG$res.imputePCA.cours.valeur.banques,ensH$res.imputePCA.cours.valeur.banques,horizontal=FALSE,col=c("brown","red","purple","blue","green","yellow","cyan","grey"),main="Ratio cours/valeur comptable des banques en France",xlim=c(0,10),names=c("cluster A","cluster B","cluster C","cluster D","cluster E","cluster F","cluster G","cluster H"))
+
+boxplot(ensA$res.imputePCA.Balance.budgétaire.Fr,ensB$res.imputePCA.Balance.budgétaire.Fr,ensC$res.imputePCA.Balance.budgétaire.Fr,ensD$res.imputePCA.Balance.budgétaire.Fr,ensE$res.imputePCA.Balance.budgétaire.Fr,ensF$res.imputePCA.Balance.budgétaire.Fr,ensG$res.imputePCA.Balance.budgétaire.Fr,ensH$res.imputePCA.Balance.budgétaire.Fr,horizontal=FALSE,col=c("brown","red","purple","blue","green","yellow","cyan","grey"),main="Balance budgétaire (Déficit budgétaire) en France",xlim=c(0,10),names=c("cluster A","cluster B","cluster C","cluster D","cluster E","cluster F","cluster G","cluster H"),ylab=c("en % du PIB nominal de la France"))
+
+boxplot(ensA$res.imputePCA.actifs.bancaires.consolidés,ensB$res.imputePCA.actifs.bancaires.consolidés,ensC$res.imputePCA.actifs.bancaires.consolidés,ensD$res.imputePCA.actifs.bancaires.consolidés,ensE$res.imputePCA.actifs.bancaires.consolidés,ensF$res.imputePCA.actifs.bancaires.consolidés,ensG$res.imputePCA.actifs.bancaires.consolidés,ensH$res.imputePCA.actifs.bancaires.consolidés,horizontal=FALSE,col=c("brown","red","purple","blue","green","yellow","cyan","grey"),main="Actifs bancaires consolidés (regroupement de l’ensemble des actifs des banques et de leurs filiales) en France ",xlim=c(0,10),names=c("cluster A","cluster B","cluster C","cluster D","cluster E","cluster F","cluster G","cluster H"))
+
+boxplot(ensA$res.imputePCA.actifs.des.GSIB,ensB$res.imputePCA.actifs.des.GSIB,ensC$res.imputePCA.actifs.des.GSIB,ensD$res.imputePCA.actifs.des.GSIB,ensE$res.imputePCA.actifs.des.GSIB,ensF$res.imputePCA.actifs.des.GSIB,ensG$res.imputePCA.actifs.des.GSIB,ensH$res.imputePCA.actifs.des.GSIB,horizontal=FALSE,col=c("brown","red","purple","blue","green","yellow","cyan","grey"),main="Part des actifs des grandes institutions financières sur le total des actifs consolidés en France",xlim=c(0,10),names=c("cluster A","cluster B","cluster C","cluster D","cluster E","cluster F","cluster G","cluster H"))
+```
+
+Enfin, représentons l'évolution des clusters dans le temps, i.e l'évolution des états économiques dans le temps, comme précédemment :
+```{r fig.height=2, fig.width=8}
+plot( as.Date(rownames(clus2), format='%d/%m/%Y'),
+	clus2$cluster,
+	ylab = "(ClusterA=Cluster2,ClusterB=Cluster4...)",
+	xlab = "Date (évaluée chaque mois)")
+```
+
+
+
+
+
+
+
+#PARTIE 3 : ACP PAR NIPALS, CLUSTERING
+
+On nettoie l'environnement global pour éviter l'ambiguité avec la partie précédente :
+```{r}
+rm(centers, cl, clus, clus2, dbs,
+   ens1, ens2, ens3, ens4, ens5, ens6, ens7, ens8, ens9,
+   ensA, ensB, ensC, ensD, ensE, ensF, ensG, ensH,
+   interm, interm1, jk, jknew, res.compV, res.pca, taf
+   )
+```
+On charge de nouvelles librairies :
+```{r}
+library(readr)
+library(graphics)
+library(nipals)
+```
+
+On commence par l'ACP par NIPALS :
+```{r}
+nips<- nipals( dBFin,
+               ncomp = 2, #nombre de CP
+               center = TRUE, #les données sont centrées...
+               scale = TRUE, #...et réduites
+               maxiter = 500, #voir le fonctionnement de l'algorithme
+               tol = 1e-06, #idem
+               startcol = 0, #on utilise toutes les colonnes
+               fitted = FALSE,
+               force.na = FALSE, #pour éviter les problèmes de type
+               gramschmidt = TRUE, #pour s'assurer de l'orthogonalité des CP
+               verbose = FALSE         )
+scores <- nips$scores
+loads  <- as.data.frame(nips$loadings)
+loads$X <- rownames(loads)
+```
+Pour analyser la composition des composantes principales, on s'intéresse aux coordonnées de celles-ci dans l'espace engendré par les variables :
+```{r fig.height=4, fig.width=6}
+par(las=2) #horizontal variable labels
+par(mar=c(5,15,4,2)) # increase y-axis margin
+barplot(sort(loads[,"PC1"]),
+		names.arg = rownames(loads),
+		main = "Composition of PC1",
+		ylab = "",
+		xlab = "Contribution to PC1",
+		horiz=TRUE)
+```
+
+On exécute ensuite k-means sur les données projetées sur les deux composantes principales obtenues par NIPALS :
+```{r fig.height=3, fig.width=3}
+fit <- kmeans(scores, 9)
+aggregate(scores,by=list(fit$cluster),FUN=mean)
+scores <- data.frame(scores, fit$cluster)
+
+# mêmes clusters qu'auparavant :
+centers <- rbind(as.numeric(unlist(scores["01/08/2015",])),
+                 as.numeric(unlist(scores["01/04/2013",])),
+                 as.numeric(unlist(scores["01/01/2019",])),
+                 as.numeric(unlist(scores["01/03/2012",])),
+                 as.numeric(unlist(scores["01/10/2003",])),
+                 as.numeric(unlist(scores["01/10/2001",])),
+                 as.numeric(unlist(scores["01/11/2000",])),
+                 as.numeric(unlist(scores["01/09/2005",])),
+                 as.numeric(unlist(scores["01/11/2007",])))
+# clustering :
+cl <- kmeans(scores, centers, iter.max=10)
+
+# visualisation des clusters
+plot(scores[c("PC1", "PC2")], col = cl$cluster, asp = 1)
+with(scores[c("PC1", "PC2")],
+     text(
+       scores$PC1,
+       scores$PC2,
+       labels = rownames(scores),
+       cex = 0.4,
+       pos = 2
+     ))
+points(cl$centers, col = 1:9, pch = 9)
+```
+
+On crée une base de données par cluster :
+```{r}
+clus <- data.frame(cl["cluster"])
+interm <- data.frame(dBFin$X)
+row.names(interm) <- interm$dBFin.X
+interm1 <- merge(clus, interm, by=0, all=T)
+#interm1 <- select(interm1,-c(3))
+
+ens1 <- dBFin[interm1[ which(interm1$cluster==1), 1],]
+ens2 <- dBFin[interm1[ which(interm1$cluster==2), 1],]
+ens3 <- dBFin[interm1[ which(interm1$cluster==3), 1],]
+ens4 <- dBFin[interm1[ which(interm1$cluster==4), 1],]
+ens5 <- dBFin[interm1[ which(interm1$cluster==5), 1],]
+ens6 <- dBFin[interm1[ which(interm1$cluster==6), 1],]
+ens7 <- dBFin[interm1[ which(interm1$cluster==7), 1],]
+ens8 <- dBFin[interm1[ which(interm1$cluster==8), 1],]
+ens9 <- dBFin[interm1[ which(interm1$cluster==9), 1],]
+```
+
+Afin de comparer les clusters entre eux, on utilise des boxplots. Ce sont les mêmes que dans la partie 2, donc on peut les comparer directement.
+```{r fig.height=5, fig.width=5}
+#CAC40 INDICES:
+boxplot(ens1$CAC.index, ens2$CAC.index, ens3$CAC.index, ens4$CAC.index,
+		ens5$CAC.index, ens6$CAC.index, ens7$CAC.index, ens8$CAC.index,
+		ens9$CAC.index,
+		
+		horizontal=FALSE,
+		col = c("brown","red","purple","blue","green","yellow","cyan","grey","pink"),
+		main = "CAC 40 Index (40 plus grosses entreprises côtées en bourse en France)",
+		xlim = c(0,10),
+		ylim=c(2800,6000),
+		names = c("cluster 1","cluster 2","cluster 3",
+				  "cluster 4","cluster 5","cluster 6",
+				  "cluster 7","cluster 8","cluster 9"))
+
+#EUROSTOXX INDICES:
+boxplot(ens1$Eurostoxx.Index, ens2$Eurostoxx.Index, ens3$Eurostoxx.Index, ens4$Eurostoxx.Index, ens5$Eurostoxx.Index, ens6$Eurostoxx.Index, ens7$Eurostoxx.Index, ens8$Eurostoxx.Index,ens9$Eurostoxx.Index, horizontal=FALSE, col = c("brown","red","purple","blue","green","yellow","cyan","grey","pink"), main = "Eurostoxx 50 Index (50 plus grosses entreprises côtées en bourse en zone euro)", xlim=c(0,10), names = c("cluster 1","cluster 2","cluster 3","cluster 4","cluster 5","cluster 6","cluster 7","cluster 8","cluster 9"))
+
+#MARKET RATE/CARRYING VALUE OF BANKS:
+boxplot(ens1$cours.valeur.banques, ens2$cours.valeur.banques,
+		ens3$cours.valeur.banques, ens4$cours.valeur.banques,
+		ens5$cours.valeur.banques, ens6$cours.valeur.banques,
+		ens7$cours.valeur.banques, ens8$cours.valeur.banques,
+		ens9$cours.valeur.banques,
+		horizontal= FALSE,
+		col = c("brown","red","purple","blue","green",
+				"yellow","cyan","grey","pink"),
+		main = "Ratio cours/valeur comptable des banques en France",
+		xlim= c(0,10),
+		ylim = c(42,170),
+		names=c("cluster 1","cluster 2","cluster 3",
+				"cluster 4","cluster 5","cluster 6",
+				"cluster 7","cluster 8","cluster 9"))
+
+#FISCAL BALANCE:
+boxplot(ens1$Balance.budgétaire.Fr,ens2$Balance.budgétaire.Fr,ens3$Balance.budgétaire.Fr,ens4$Balance.budgétaire.Fr,ens5$Balance.budgétaire.Fr,ens6$Balance.budgétaire.Fr,ens7$Balance.budgétaire.Fr,ens8$Balance.budgétaire.Fr,ens9$Balance.budgétaire.Fr,horizontal=FALSE,col=c("brown","red","purple","blue","green","yellow","cyan","grey","pink"),main="Balance budgétaire (Déficit budgétaire) en France",xlim=c(0,10),ylim=c(-5.5,-1),names=c("cluster 1","cluster 2","cluster 3","cluster 4","cluster 5","cluster 6","cluster 7","cluster 8","cluster 9"),ylab=c("en % du PIB nominal de la France"))
+
+#CONSOLIDATED BANK ASSETS:
+boxplot(ens1$actifs.bancaires.consolidés,ens2$actifs.bancaires.consolidés,ens3$actifs.bancaires.consolidés,ens4$actifs.bancaires.consolidés,ens5$actifs.bancaires.consolidés,ens6$actifs.bancaires.consolidés,ens7$actifs.bancaires.consolidés,ens8$actifs.bancaires.consolidés,ens9$actifs.bancaires.consolidés,horizontal=FALSE,col=c("brown","red","purple","blue","green","yellow","cyan","grey","pink"),main="Actifs bancaires consolidés (regroupement de l’ensemble des actifs des banques et de leurs filiales) en France ",xlim=c(0,10),names=c("cluster 1","cluster 2","cluster 3","cluster 4","cluster 5","cluster 6","cluster 7","cluster 8","cluster 9"))
+```
+
+On peut aussi visualiser la chronologie des clusters :
+```{r fig.height=2, fig.width=8}
+plot(as.Date(as.character(interm1$Row.names),format='%d/%m/%Y'),interm1$cluster,ylab = "Numéro du cluster", xlab = "Date (évaluée chaque mois)", ylim=c(0,9))
+```
+
+
+
+Notons enfin que DBSCAN n'est pas adaptable aux matrices avec données manquantes, donc nous n'avons pas pu comparer les clusters obtenus par DBSCAN.
